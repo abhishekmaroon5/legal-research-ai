@@ -11,6 +11,19 @@ A sophisticated AI-powered legal research assistant that helps users conduct leg
 - Expert critique and feedback
 - Interactive web interface
 
+## Agent Flow
+
+The agent follows a structured flow using LangGraph for state management. Here's a visual representation of the agent's workflow:
+
+![Agent Flow Graph](langgraph.jpg)
+
+The graph shows how the agent processes legal research tasks through different states:
+1. Research Planning
+2. Source Finding
+3. Source Summarization
+4. Argument Building
+5. Critique and Revision
+
 ## Prerequisites
 
 - Python 3.11 or higher
