@@ -1,6 +1,16 @@
-# Legal Research Agent (legal-research-ai)
+# Legal Research AI Assistant
 
-A sophisticated AI-powered legal research assistant that helps users conduct legal research, analyze cases, and draft legal arguments. The agent uses a state-of-the-art language model and web search capabilities to provide comprehensive legal research support.
+An AI-powered tool for legal research, case analysis, and argument drafting. This tool uses advanced language models and search capabilities to help legal professionals and students conduct thorough legal research and draft well-structured legal arguments.
+
+## User Interface
+
+![Gradio UI Demo](Gradio_ui.png)
+
+The interface provides an intuitive way to:
+- Input legal questions
+- View research progress in real-time
+- Access research plans, sources, and arguments
+- Get expert critiques and suggestions
 
 ## Features
 
