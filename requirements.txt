@@ -1,0 +1,9 @@
+langgraph>=0.0.15
+langchain-core>=0.1.17
+langchain-openai>=0.0.5
+python-dotenv>=1.0.0
+gradio>=4.31.3
+tavily-python>=0.2.6
+typing-extensions>=4.8.0
+pydantic>=2.5.2
+sqlite3-api>=0.1.0 
