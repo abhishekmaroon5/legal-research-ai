@@ -112,21 +112,43 @@ Focus on addressing the gaps identified in the critique."""
             "count": 1
         }
     def research_plan_node(self, state: AgentState):
-        queries = self.model.with_structured_output(Queries).invoke([
-            SystemMessage(content=self.RESEARCH_PLAN_PROMPT),
-            HumanMessage(content=f"Question: {state['legal_question']}\nPlan: {state['research_plan']}")
-        ])
-        sources = state['sources'] or []
-        for q in queries.queries:
-            response = self.tavily.search(query=q, max_results=2)
-            for r in response['results']:
-                sources.append(r['content'])
-        return {
-            "sources": sources,
-            "queries": queries.queries,
-            "lnode": "research_plan_node",
-            "count": 1
-        }
+        try:
+            queries = self.model.with_structured_output(Queries).invoke([
+                SystemMessage(content=self.RESEARCH_PLAN_PROMPT),
+                HumanMessage(content=f"Question: {state['legal_question']}\nPlan: {state['research_plan']}")
+            ])
+            sources = state['sources'] or []
+            
+            # Try to get sources from Tavily
+            try:
+                for q in queries.queries:
+                    try:
+                        response = self.tavily.search(query=q, max_results=2)
+                        for r in response['results']:
+                            sources.append(r['content'])
+                    except Exception as e:
+                        # If Tavily search fails, add a placeholder
+                        sources.append(f"Search failed for query: {q}. Error: {str(e)}")
+                        print(f"Tavily search error: {str(e)}")
+            except Exception as e:
+                print(f"Tavily API error: {str(e)}")
+                # Add a fallback source if all searches fail
+                sources.append("Unable to fetch sources from Tavily. Please check your API key and internet connection.")
+            
+            return {
+                "sources": sources,
+                "queries": queries.queries,
+                "lnode": "research_plan_node",
+                "count": 1
+            }
+        except Exception as e:
+            print(f"Error in research_plan_node: {str(e)}")
+            return {
+                "sources": ["Error occurred during research planning. Please try again."],
+                "queries": [],
+                "lnode": "research_plan_node",
+                "count": 1
+            }
     def generation_node(self, state: AgentState):
         content = "\n\n".join(state['sources'] or [])
         user_message = HumanMessage(
@@ -154,20 +176,41 @@ Focus on addressing the gaps identified in the critique."""
             "count": 1
         }
     def research_critique_node(self, state: AgentState):
-        queries = self.model.with_structured_output(Queries).invoke([
-            SystemMessage(content=self.RESEARCH_CRITIQUE_PROMPT),
-            HumanMessage(content=state['critique'])
-        ])
-        sources = state['sources'] or []
-        for q in queries.queries:
-            response = self.tavily.search(query=q, max_results=2)
-            for r in response['results']:
-                sources.append(r['content'])
-        return {
-            "sources": sources,
-            "lnode": "research_critique",
-            "count": 1
-        }
+        try:
+            queries = self.model.with_structured_output(Queries).invoke([
+                SystemMessage(content=self.RESEARCH_CRITIQUE_PROMPT),
+                HumanMessage(content=state['critique'])
+            ])
+            sources = state['sources'] or []
+            
+            # Try to get sources from Tavily
+            try:
+                for q in queries.queries:
+                    try:
+                        response = self.tavily.search(query=q, max_results=2)
+                        for r in response['results']:
+                            sources.append(r['content'])
+                    except Exception as e:
+                        # If Tavily search fails, add a placeholder
+                        sources.append(f"Search failed for query: {q}. Error: {str(e)}")
+                        print(f"Tavily search error: {str(e)}")
+            except Exception as e:
+                print(f"Tavily API error: {str(e)}")
+                # Add a fallback source if all searches fail
+                sources.append("Unable to fetch sources from Tavily. Please check your API key and internet connection.")
+            
+            return {
+                "sources": sources,
+                "lnode": "research_critique",
+                "count": 1
+            }
+        except Exception as e:
+            print(f"Error in research_critique_node: {str(e)}")
+            return {
+                "sources": ["Error occurred during research critique. Please try again."],
+                "lnode": "research_critique",
+                "count": 1
+            }
     def should_continue(self, state):
         if state["revision_number"] > state["max_revisions"]:
             return END
@@ -187,12 +230,56 @@ class writer_gui( ):
         self.threads = []
         self.thread_id = -1
         self.thread = {"configurable": {"thread_id": str(self.thread_id)}}
-        #self.sdisps = {} #global    
         self.demo = self.create_interface()
 
-    def run_agent(self, start,topic,stop_after):
-        #global partial_message, thread_id,thread
-        #global response, max_iterations, iterations, threads
+    def updt_disp(self, topic_bx, lnode_bx, nnode_bx, threadid_bx, revision_bx, count_bx, step_pd, thread_pd):
+        ''' general update display on state change '''
+        current_state = self.graph.get_state(self.thread)
+        hist = []
+        for state in self.graph.get_state_history(self.thread):
+            if state.metadata['step'] < 1:
+                continue
+            s_thread_ts = state.config['configurable']['thread_ts']
+            s_tid = state.config['configurable']['thread_id']
+            s_count = state.values.get('count', 0)
+            s_lnode = state.values.get('lnode', '')
+            s_rev = state.values.get('revision_number', 0)
+            s_nnode = state.next
+            st = f"{s_tid}:{s_count}:{s_lnode}:{s_nnode}:{s_rev}:{s_thread_ts}"
+            hist.append(st)
+        if not current_state.metadata:
+            return {}
+        else:
+            return {
+                topic_bx: current_state.values.get("legal_question", ""),
+                lnode_bx: current_state.values.get("lnode", ""),
+                count_bx: current_state.values.get("count", 0),
+                revision_bx: current_state.values.get("revision_number", 0),
+                nnode_bx: current_state.next,
+                threadid_bx: self.thread_id,
+                thread_pd: gr.Dropdown(label="Select Thread", choices=self.threads, value=self.thread_id, interactive=True),
+                step_pd: gr.Dropdown(label="Select Step", choices=hist, value=hist[0] if hist else None, interactive=True),
+            }
+
+    def get_snapshots(self):
+        new_label = f"thread_id: {self.thread_id}, Summary of snapshots"
+        sstate = ""
+        for state in self.graph.get_state_history(self.thread):
+            for key in ['research_plan', 'argument_draft', 'critique']:
+                if key in state.values:
+                    state.values[key] = state.values[key][:80] + "..."
+            if 'sources' in state.values:
+                for i in range(len(state.values['sources'])):
+                    state.values['sources'][i] = state.values['sources'][i][:20] + '...'
+            if 'writes' in state.metadata:
+                state.metadata['writes'] = "not shown"
+            sstate += str(state) + "\n\n"
+        return gr.update(label=new_label, value=sstate)
+
+    def vary_btn(self, stat):
+        return(gr.update(variant=stat))
+
+    def run_agent(self, start, topic, stop_after):
         if start:
             self.iterations.append(0)
             config = {
@@ -207,32 +294,76 @@ class writer_gui( ):
                 "queries": "no queries",
                 "count": 0
             }
-            self.thread_id += 1  # new agent, new thread
+            self.thread_id += 1
             self.threads.append(self.thread_id)
+            self.partial_message = ""  # Reset message on start
         else:
             config = None
         self.thread = {"configurable": {"thread_id": str(self.thread_id)}}
         while self.iterations[self.thread_id] < self.max_iterations:
             self.response = self.graph.invoke(config, self.thread)
             self.iterations[self.thread_id] += 1
-            self.partial_message += str(self.response)
-            self.partial_message += f"\n------------------\n\n"
-            ## fix
-            lnode,nnode,_,rev,acount = self.get_disp_state()
-            yield self.partial_message,lnode,nnode,self.thread_id,rev,acount
-            config = None #need
-            #print(f"run_agent:{lnode}")
+            
+            # Format the response for better display
+            current_state = self.graph.get_state(self.thread)
+            current_node = current_state.values.get("lnode", "")
+            next_node = current_state.next
+            
+            # Create a formatted message
+            formatted_message = f"""
+### Current Stage: {current_node}
+**Next Stage:** {next_node}
+
+**Progress Update:**
+{self.format_state_output(current_state)}
+
+---
+"""
+            self.partial_message += formatted_message
+            
+            # Update display state
+            lnode, nnode, _, rev, acount = self.get_disp_state()
+            
+            # Return only the formatted message for the Markdown component
+            yield self.partial_message
+            
+            config = None
             if not nnode:  
-                #print("Hit the end")
                 return
             if lnode in stop_after:
-                #print(f"stopping due to stop_after {lnode}")
                 return
-            else:
-                #print(f"Not stopping on lnode {lnode}")
-                pass
-        return
-    
+
+    def format_state_output(self, state):
+        """Format the state output for better readability"""
+        output = []
+        
+        # Format research plan
+        if state.values.get("research_plan") and state.values["research_plan"] != "no plan":
+            output.append("**Research Plan:**")
+            output.append(state.values["research_plan"])
+            output.append("")
+        
+        # Format sources
+        if state.values.get("sources") and state.values["sources"] != ["no content"]:
+            output.append("**Sources Found:**")
+            for i, source in enumerate(state.values["sources"], 1):
+                output.append(f"{i}. {source[:200]}...")
+            output.append("")
+        
+        # Format argument draft
+        if state.values.get("argument_draft") and state.values["argument_draft"] != "no draft":
+            output.append("**Current Argument:**")
+            output.append(state.values["argument_draft"])
+            output.append("")
+        
+        # Format critique
+        if state.values.get("critique") and state.values["critique"] != "no critique":
+            output.append("**Expert Critique:**")
+            output.append(state.values["critique"])
+            output.append("")
+        
+        return "\n".join(output)
+
     def get_disp_state(self):
         current_state = self.graph.get_state(self.thread)
         lnode = current_state.values.get("lnode", "")
@@ -326,130 +457,279 @@ class writer_gui( ):
 
 
     def create_interface(self):
-        with gr.Blocks(theme=gr.themes.Default(spacing_size='sm',text_size="sm")) as demo:
+        with gr.Blocks(
+            theme=gr.themes.Soft(
+                primary_hue="blue",
+                secondary_hue="blue",
+                neutral_hue="slate",
+                spacing_size="sm",
+                radius_size="md",
+                text_size="md"
+            )
+        ) as demo:
+            gr.Markdown("""
+            # Legal Research AI Assistant
+            An AI-powered tool for legal research, case analysis, and argument drafting.
+            """)
             
-            def updt_disp():
-                ''' general update display on state change '''
-                current_state = self.graph.get_state(self.thread)
-                hist = []
-                for state in self.graph.get_state_history(self.thread):
-                    if state.metadata['step'] < 1:
-                        continue
-                    s_thread_ts = state.config['configurable']['thread_ts']
-                    s_tid = state.config['configurable']['thread_id']
-                    s_count = state.values.get('count', 0)
-                    s_lnode = state.values.get('lnode', '')
-                    s_rev = state.values.get('revision_number', 0)
-                    s_nnode = state.next
-                    st = f"{s_tid}:{s_count}:{s_lnode}:{s_nnode}:{s_rev}:{s_thread_ts}"
-                    hist.append(st)
-                if not current_state.metadata:
-                    return {}
-                else:
-                    return {
-                        topic_bx: current_state.values.get("legal_question", ""),
-                        lnode_bx: current_state.values.get("lnode", ""),
-                        count_bx: current_state.values.get("count", 0),
-                        revision_bx: current_state.values.get("revision_number", 0),
-                        nnode_bx: current_state.next,
-                        threadid_bx: self.thread_id,
-                        thread_pd: gr.Dropdown(label="choose thread", choices=self.threads, value=self.thread_id, interactive=True),
-                        step_pd: gr.Dropdown(label="update_state from: thread:count:last_node:next_node:rev:thread_ts", 
-                               choices=hist, value=hist[0] if hist else None, interactive=True),
-                    }
-            def get_snapshots():
-                new_label = f"thread_id: {self.thread_id}, Summary of snapshots"
-                sstate = ""
-                for state in self.graph.get_state_history(self.thread):
-                    for key in ['research_plan', 'argument_draft', 'critique']:
-                        if key in state.values:
-                            state.values[key] = state.values[key][:80] + "..."
-                    if 'sources' in state.values:
-                        for i in range(len(state.values['sources'])):
-                            state.values['sources'][i] = state.values['sources'][i][:20] + '...'
-                    if 'writes' in state.metadata:
-                        state.metadata['writes'] = "not shown"
-                    sstate += str(state) + "\n\n"
-                return gr.update(label=new_label, value=sstate)
-
-            def vary_btn(stat):
-                #print(f"vary_btn{stat}")
-                return(gr.update(variant=stat))
-            
-            with gr.Tab("Agent"):
+            with gr.Tab("Research Assistant"):
                 with gr.Row():
-                    topic_bx = gr.Textbox(label="Legal Question", value="Pizza Shop")
-                    gen_btn = gr.Button("Generate Argument", scale=0,min_width=80, variant='primary')
-                    cont_btn = gr.Button("Continue Argument", scale=0,min_width=80)
+                    with gr.Column(scale=2):
+                        topic_bx = gr.Textbox(
+                            label="Legal Question",
+                            placeholder="Enter your legal question here...",
+                            value="What is the standard for summary judgment in federal court?",
+                            lines=3
+                        )
+                    with gr.Column(scale=1):
+                        with gr.Row():
+                            gen_btn = gr.Button("Start Research", variant="primary", size="lg")
+                            cont_btn = gr.Button("Continue Research", size="lg")
+                
                 with gr.Row():
-                    lnode_bx = gr.Textbox(label="last node", min_width=100)
-                    nnode_bx = gr.Textbox(label="next node", min_width=100)
-                    threadid_bx = gr.Textbox(label="Thread", scale=0, min_width=80)
-                    revision_bx = gr.Textbox(label="Draft Rev", scale=0, min_width=80)
-                    count_bx = gr.Textbox(label="count", scale=0, min_width=80)
-                with gr.Accordion("Manage Agent", open=False):
+                    with gr.Column(scale=1):
+                        lnode_bx = gr.Textbox(label="Current Stage", min_width=100)
+                        nnode_bx = gr.Textbox(label="Next Stage", min_width=100)
+                    with gr.Column(scale=1):
+                        threadid_bx = gr.Textbox(label="Thread ID", scale=0, min_width=80)
+                        revision_bx = gr.Textbox(label="Revision", scale=0, min_width=80)
+                        count_bx = gr.Textbox(label="Step Count", scale=0, min_width=80)
+                
+                with gr.Accordion("Advanced Controls", open=False):
                     checks = list(self.graph.nodes.keys())
                     checks.remove('__start__')
-                    stop_after = gr.CheckboxGroup(checks,label="Interrupt After State", value=checks, scale=0, min_width=400)
+                    stop_after = gr.CheckboxGroup(
+                        checks,
+                        label="Interrupt After Stage",
+                        value=checks,
+                        scale=0,
+                        min_width=400
+                    )
                     with gr.Row():
-                        thread_pd = gr.Dropdown(choices=self.threads,interactive=True, label="select thread", min_width=120, scale=0)
-                        step_pd = gr.Dropdown(choices=['N/A'],interactive=True, label="select step", min_width=160, scale=1)
-                live = gr.Textbox(label="Live Agent Output", lines=5, max_lines=5)
-        
-                # actions
-                sdisps =[topic_bx,lnode_bx,nnode_bx,threadid_bx,revision_bx,count_bx,step_pd,thread_pd]
-                thread_pd.input(self.switch_thread, [thread_pd], None).then(
-                                fn=updt_disp, inputs=None, outputs=sdisps)
-                step_pd.input(self.copy_state,[step_pd],None).then(
-                              fn=updt_disp, inputs=None, outputs=sdisps)
-                gen_btn.click(vary_btn,gr.Number("secondary", visible=False), gen_btn).then(
-                              fn=self.run_agent, inputs=[gr.Number(True, visible=False),topic_bx,stop_after], outputs=[live],show_progress=True).then(
-                              fn=updt_disp, inputs=None, outputs=sdisps).then( 
-                              vary_btn,gr.Number("primary", visible=False), gen_btn).then(
-                              vary_btn,gr.Number("primary", visible=False), cont_btn)
-                cont_btn.click(vary_btn,gr.Number("secondary", visible=False), cont_btn).then(
-                               fn=self.run_agent, inputs=[gr.Number(False, visible=False),topic_bx,stop_after], 
-                               outputs=[live]).then(
-                               fn=updt_disp, inputs=None, outputs=sdisps).then(
-                               vary_btn,gr.Number("primary", visible=False), cont_btn)
-        
+                        thread_pd = gr.Dropdown(
+                            choices=self.threads,
+                            interactive=True,
+                            label="Select Thread",
+                            min_width=120,
+                            scale=0
+                        )
+                        step_pd = gr.Dropdown(
+                            choices=['N/A'],
+                            interactive=True,
+                            label="Select Step",
+                            min_width=160,
+                            scale=1
+                        )
+                
+                live = gr.Markdown(
+                    label="Research Progress",
+                    value="",
+                    elem_classes=["research-progress"]
+                )
+            
             with gr.Tab("Research Plan"):
                 with gr.Row():
-                    refresh_btn = gr.Button("Refresh")
-                    modify_btn = gr.Button("Modify")
-                plan = gr.Textbox(label="Research Plan", lines=10, interactive=True)
-                refresh_btn.click(fn=self.get_state, inputs=gr.Number("research_plan_node", visible=False), outputs=plan)
-                modify_btn.click(fn=self.modify_state, inputs=[gr.Number("research_plan_node", visible=False),
-                                                          gr.Number("planner", visible=False), plan],outputs=None).then(
-                                 fn=updt_disp, inputs=None, outputs=sdisps)
-            with gr.Tab("Research Content"):
-                refresh_btn = gr.Button("Refresh")
-                content_bx = gr.Textbox(label="sources", lines=10)
-                refresh_btn.click(fn=self.get_content, inputs=None, outputs=content_bx)
-            with gr.Tab("Argument Draft"):
+                    with gr.Column(scale=1):
+                        refresh_btn = gr.Button("Refresh Plan", variant="secondary")
+                        modify_btn = gr.Button("Modify Plan", variant="primary")
+                plan = gr.Textbox(
+                    label="Research Plan",
+                    lines=10,
+                    interactive=True,
+                    show_copy_button=True
+                )
+            
+            with gr.Tab("Legal Sources"):
                 with gr.Row():
-                    refresh_btn = gr.Button("Refresh")
-                    modify_btn = gr.Button("Modify")
-                draft_bx = gr.Textbox(label="argument_draft", lines=10, interactive=True)
-                refresh_btn.click(fn=self.get_state, inputs=gr.Number("argument_draft", visible=False), outputs=draft_bx)
-                modify_btn.click(fn=self.modify_state, inputs=[gr.Number("argument_draft", visible=False),
-                                                          gr.Number("generate", visible=False), draft_bx], outputs=None).then(
-                                fn=updt_disp, inputs=None, outputs=sdisps)
-            with gr.Tab("Critique"):
+                    refresh_btn = gr.Button("Refresh Sources", variant="secondary")
+                content_bx = gr.Textbox(
+                    label="Research Sources",
+                    lines=10,
+                    show_copy_button=True
+                )
+            
+            with gr.Tab("Legal Argument"):
                 with gr.Row():
-                    refresh_btn = gr.Button("Refresh")
-                    modify_btn = gr.Button("Modify")
-                critique_bx = gr.Textbox(label="Critique", lines=10, interactive=True)
-                refresh_btn.click(fn=self.get_state, inputs=gr.Number("critique", visible=False), outputs=critique_bx)
-                modify_btn.click(fn=self.modify_state, inputs=[gr.Number("critique", visible=False),
-                                                          gr.Number("critique_node", visible=False), 
-                                                          critique_bx], outputs=None).then(
-                                fn=updt_disp, inputs=None, outputs=sdisps)
-            with gr.Tab("StateSnapShots"):
+                    with gr.Column(scale=1):
+                        refresh_btn = gr.Button("Refresh Argument", variant="secondary")
+                        modify_btn = gr.Button("Modify Argument", variant="primary")
+                draft_bx = gr.Textbox(
+                    label="Legal Argument",
+                    lines=10,
+                    interactive=True,
+                    show_copy_button=True
+                )
+            
+            with gr.Tab("Expert Critique"):
                 with gr.Row():
-                    refresh_btn = gr.Button("Refresh")
-                snapshots = gr.Textbox(label="State Snapshots Summaries")
-                refresh_btn.click(fn=get_snapshots, inputs=None, outputs=snapshots)
+                    with gr.Column(scale=1):
+                        refresh_btn = gr.Button("Refresh Critique", variant="secondary")
+                        modify_btn = gr.Button("Modify Critique", variant="primary")
+                critique_bx = gr.Textbox(
+                    label="Expert Critique",
+                    lines=10,
+                    interactive=True,
+                    show_copy_button=True
+                )
+            
+            with gr.Tab("State History"):
+                with gr.Row():
+                    refresh_btn = gr.Button("Refresh History", variant="secondary")
+                snapshots = gr.Textbox(
+                    label="State History",
+                    lines=10,
+                    show_copy_button=True
+                )
+            
+            # Add error message display
+            error_msg = gr.Markdown(
+                value="",
+                visible=False,
+                elem_classes=["error-message"]
+            )
+            
+            # Add custom CSS for error messages
+            gr.HTML("""
+            <style>
+            .error-message {
+                background-color: #fff3f3;
+                border: 1px solid #ffcdd2;
+                border-radius: 8px;
+                padding: 15px;
+                margin: 10px 0;
+                color: #d32f2f;
+            }
+            </style>
+            """)
+            
+            # Actions
+            sdisps = [topic_bx, lnode_bx, nnode_bx, threadid_bx, revision_bx, count_bx, step_pd, thread_pd]
+            
+            thread_pd.input(self.switch_thread, [thread_pd], None).then(
+                fn=lambda: self.updt_disp(*sdisps), inputs=None, outputs=sdisps
+            )
+            
+            step_pd.input(self.copy_state, [step_pd], None).then(
+                fn=lambda: self.updt_disp(*sdisps), inputs=None, outputs=sdisps
+            )
+            
+            gen_btn.click(
+                self.vary_btn, gr.Number("secondary", visible=False), gen_btn
+            ).then(
+                fn=self.run_agent,
+                inputs=[gr.Number(True, visible=False), topic_bx, stop_after],
+                outputs=[live],
+                show_progress=True
+            ).then(
+                fn=lambda: self.updt_disp(*sdisps), inputs=None, outputs=sdisps
+            ).then(
+                self.vary_btn, gr.Number("primary", visible=False), gen_btn
+            ).then(
+                self.vary_btn, gr.Number("primary", visible=False), cont_btn
+            )
+            
+            cont_btn.click(
+                self.vary_btn, gr.Number("secondary", visible=False), cont_btn
+            ).then(
+                fn=self.run_agent,
+                inputs=[gr.Number(False, visible=False), topic_bx, stop_after],
+                outputs=[live],
+                show_progress=True
+            ).then(
+                fn=lambda: self.updt_disp(*sdisps), inputs=None, outputs=sdisps
+            ).then(
+                self.vary_btn, gr.Number("primary", visible=False), cont_btn
+            )
+            
+            # Plan tab actions
+            with gr.Tab("Research Plan"):
+                refresh_btn.click(
+                    fn=self.get_state,
+                    inputs=gr.Number("research_plan", visible=False),
+                    outputs=plan
+                )
+                modify_btn.click(
+                    fn=self.modify_state,
+                    inputs=[gr.Number("research_plan", visible=False),
+                           gr.Number("planner", visible=False), plan],
+                    outputs=None
+                ).then(
+                    fn=lambda: self.updt_disp(*sdisps), inputs=None, outputs=sdisps
+                )
+            
+            # Sources tab actions
+            with gr.Tab("Legal Sources"):
+                refresh_btn.click(
+                    fn=self.get_content,
+                    inputs=None,
+                    outputs=content_bx
+                )
+            
+            # Argument tab actions
+            with gr.Tab("Legal Argument"):
+                refresh_btn.click(
+                    fn=self.get_state,
+                    inputs=gr.Number("argument_draft", visible=False),
+                    outputs=draft_bx
+                )
+                modify_btn.click(
+                    fn=self.modify_state,
+                    inputs=[gr.Number("argument_draft", visible=False),
+                           gr.Number("generate", visible=False), draft_bx],
+                    outputs=None
+                ).then(
+                    fn=lambda: self.updt_disp(*sdisps), inputs=None, outputs=sdisps
+                )
+            
+            # Critique tab actions
+            with gr.Tab("Expert Critique"):
+                refresh_btn.click(
+                    fn=self.get_state,
+                    inputs=gr.Number("critique", visible=False),
+                    outputs=critique_bx
+                )
+                modify_btn.click(
+                    fn=self.modify_state,
+                    inputs=[gr.Number("critique", visible=False),
+                           gr.Number("critique_node", visible=False), critique_bx],
+                    outputs=None
+                ).then(
+                    fn=lambda: self.updt_disp(*sdisps), inputs=None, outputs=sdisps
+                )
+            
+            # History tab actions
+            with gr.Tab("State History"):
+                refresh_btn.click(
+                    fn=self.get_snapshots,
+                    inputs=None,
+                    outputs=snapshots
+                )
+            
+            # Add custom CSS for better formatting
+            gr.HTML("""
+            <style>
+            .research-progress {
+                background-color: #f8f9fa;
+                border-radius: 8px;
+                padding: 15px;
+                margin: 10px 0;
+                border: 1px solid #e9ecef;
+            }
+            .research-progress h3 {
+                color: #2c3e50;
+                margin-bottom: 10px;
+            }
+            .research-progress strong {
+                color: #3498db;
+            }
+            .research-progress hr {
+                border: none;
+                border-top: 1px solid #e9ecef;
+                margin: 15px 0;
+            }
+            </style>
+            """)
+        
         return demo
 
     def launch(self, share=None):
